@@ -1,0 +1,97 @@
+name: ImmortalWrt MT7981（NX30 Pro + 360T7）同时编译双固件
+
+# 触发条件：1. 修改 diffconfig/feeds 自动触发；2. 手动触发
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'diffconfig', 'feeds.conf.default' ]
+  workflow_dispatch:  # 手动触发（无需选择机型，直接同时编译两台）
+
+# 工作流核心配置：使用 matrix 矩阵定义双机型
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    # 定义矩阵：包含两台设备的标识与机型配置
+    strategy:
+      fail-fast: false  # 一台编译失败不影响另一台（关键，避免其中一台报错导致整体终止）
+      matrix:
+        device:
+          - name: nx30pro
+            config: CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_magic-nx30-pro=y
+            disable_config: CONFIG_TARGET_mediatek_mt7981_DEVICE_360_t7=y
+          - name: 360t7
+            config: CONFIG_TARGET_mediatek_mt7981_DEVICE_360_t7=y
+            disable_config: CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_magic-nx30-pro=y
+
+    steps:
+      # 步骤 1：检出仓库源码
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # 步骤 2：安装编译依赖
+      - name: 安装编译依赖
+        run: |
+          sudo apt update && sudo apt upgrade -y
+          sudo apt install -y build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 python3-pip python3-setuptools rsync subversion unzip wget curl libssl-dev swig libelf-dev gcc-multilib flex uglifyjs git-core gcc g++ qemu-utils upx libglib2.0-dev xmlto qemu-system-x86 device-tree-compiler autoconf automake libtool autopoint pkg-config libncursesw5-dev libreadline-dev libffi-dev libpcre3-dev zlib1g-dev
+
+      # 步骤 3：拉取 ImmortalWrt 稳定分支源码
+      - name: 拉取 ImmortalWrt 源码
+        run: |
+          git clone --depth 1 --branch openwrt-23.05 https://github.com/immortalwrt/immortalwrt.git ./immortalwrt-${{ matrix.device.name }}
+          cd ./immortalwrt-${{ matrix.device.name }}
+          # 复制/创建 feeds.conf.default
+          cp ../feeds.conf.default ./feeds.conf.default || {
+            cat > ./feeds.conf.default << EOF
+          src-git packages https://github.com/immortalwrt/packages.git
+          src-git luci https://github.com/immortalwrt/luci.git
+          src-git routing https://github.com/immortalwrt/routing.git
+          src-git telephony https://github.com/immortalwrt/telephony.git
+          src-git small https://github.com/kenzok8/small.git
+          src-git small8 https://github.com/kenzok8/small-package.git
+          EOF
+          }
+
+      # 步骤 4：更新并安装 Feeds
+      - name: 更新与安装 Feeds
+        run: |
+          cd ./immortalwrt-${{ matrix.device.name }}
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # 步骤 5：导入 diffconfig 并切换对应机型
+      - name: 导入自定义配置（适配当前机型）
+        run: |
+          cd ./immortalwrt-${{ matrix.device.name }}
+          # 复制通用 diffconfig 并适配机型
+          cp ../diffconfig ./.config
+          # 启用当前机型配置，禁用另一机型
+          sed -i "s/^#* \({{ matrix.device.config }}\)/\1/" ./.config
+          sed -i "s/^ \({{ matrix.device.disable_config }}\)/# \1/" ./.config
+          # 生成完整配置
+          make defconfig
+
+      # 步骤 6：预下载依赖包（避免网络中断）
+      - name: 预下载依赖包
+        run: |
+          cd ./immortalwrt-${{ matrix.device.name }}
+          make download -j$(nproc)
+          find ./dl -size -1024c -delete  # 删除下载失败的空文件
+
+      # 步骤 7：编译对应机型固件
+      - name: 编译 ${{ matrix.device.name }} 固件
+        run: |
+          cd ./immortalwrt-${{ matrix.device.name }}
+          make -j1 V=s  # 单线程编译，保证稳定性
+
+      # 步骤 8：上传对应机型固件（双固件分别打包，便于区分）
+      - name: 上传 ${{ matrix.device.name }} 固件 Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ImmortalWrt-MT7981-${{ matrix.device.name }}-Firmware
+          path: |
+            ./immortalwrt-${{ matrix.device.name }}/bin/targets/mediatek/mt7981/*.bin
+            ./immortalwrt-${{ matrix.device.name }}/bin/targets/mediatek/mt7981/*.img
+            ./immortalwrt-${{ matrix.device.name }}/bin/targets/mediatek/mt7981/*.sha256sums
