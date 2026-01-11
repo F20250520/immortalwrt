@@ -39,7 +39,7 @@ jobs:
       # 步骤 3：拉取 ImmortalWrt 稳定分支源码
       - name: 拉取 ImmortalWrt 源码
         run: |
-          git clone --depth 1 --branch openwrt-23.05 https://github.com/immortalwrt/immortalwrt.git ./immortalwrt-${{ matrix.device.name }}
+          git clone https://github.com/F20250520/immortalwrt.git ./immortalwrt-${{ matrix.device.name }}
           cd ./immortalwrt-${{ matrix.device.name }}
           # 复制/创建 feeds.conf.default
           cp ../feeds.conf.default ./feeds.conf.default || {
